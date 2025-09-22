@@ -1,0 +1,970 @@
+openapi: 3.0.3
+info:
+  title: CodeRoutine API
+  description: |
+    API specification for the CodeRoutine backend service.
+    
+    This API provides endpoints for managing daily coding articles, user analytics, 
+    notifications, and content generation features. It's designed to support a 
+    React Native mobile application with offline capabilities.
+    
+    ## Authentication
+    All endpoints (except `/health`) require an access token in the `x-access-token` header.
+    
+    ## Rate Limiting
+    The API implements rate limiting of 100 requests per 15 minutes per IP address.
+    
+    ## Error Handling
+    All errors follow a consistent format with error codes for programmatic handling.
+  version: 1.0.0
+  contact:
+    name: CodeRoutine API Support
+    url: https://github.com/edodusi/coderoutine-oss
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: https://your-api-url.com
+    description: Production server
+  - url: http://localhost:8080
+    description: Local development server
+
+security:
+  - AccessToken: []
+
+paths:
+  /health:
+    get:
+      summary: Health check endpoint
+      description: Returns the health status of the API service
+      tags:
+        - System
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: healthy
+                  timestamp:
+                    type: string
+                    format: date-time
+                  version:
+                    type: string
+                    example: "1.0.0"
+
+  /api/articles/today:
+    get:
+      summary: Get today's article
+      description: |
+        Retrieves the article designated for today's reading routine.
+        If no article is found for today, returns the most recent active article as a fallback.
+      tags:
+        - Articles
+      responses:
+        '200':
+          description: Today's article retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  article:
+                    $ref: '#/components/schemas/Article'
+                  routineDay:
+                    type: string
+                    format: date
+                    example: "2024-01-15"
+                  requestedDate:
+                    type: string
+                    format: date
+                    example: "2024-01-15"
+                  fallback:
+                    type: boolean
+                    description: True if fallback article was returned
+                    example: false
+        '404':
+          description: No articles found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: "No active articles found"
+                code: "NO_ARTICLES"
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/articles:
+    get:
+      summary: Get articles list
+      description: |
+        Retrieves a paginated list of articles, excluding today's article.
+        Supports cursor-based pagination for efficient loading of large datasets.
+      tags:
+        - Articles
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of articles to return (default: 20)
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: cursor
+          in: query
+          description: Base64 encoded cursor for pagination
+          required: false
+          schema:
+            type: string
+        - name: includeInactive
+          in: query
+          description: Whether to include inactive articles
+          required: false
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Articles retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  articles:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Article'
+                  count:
+                    type: integer
+                    description: Number of articles returned
+                  hasNextPage:
+                    type: boolean
+                    description: Whether more articles are available
+                  nextCursor:
+                    type: string
+                    nullable: true
+                    description: Cursor for next page (null if no more pages)
+                  limit:
+                    type: integer
+                    description: Limit used for this request
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    post:
+      summary: Create new article
+      description: Creates a new article in the system
+      tags:
+        - Articles
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - title
+                - url
+              properties:
+                title:
+                  type: string
+                  description: Article title
+                url:
+                  type: string
+                  format: uri
+                  description: Article URL
+                description:
+                  type: string
+                  description: Article description
+                estimatedReadTime:
+                  type: integer
+                  description: Estimated reading time in minutes
+                source:
+                  type: string
+                  description: Article source/publication
+                tags:
+                  type: array
+                  items:
+                    type: string
+                  description: Article tags
+                author:
+                  type: string
+                  description: Article author
+                needsJavascript:
+                  type: boolean
+                  description: Whether article requires JavaScript to display
+                routineDay:
+                  type: string
+                  format: date
+                  description: Date for article routine (YYYY-MM-DD)
+      responses:
+        '201':
+          description: Article created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  articleId:
+                    type: string
+                  article:
+                    $ref: '#/components/schemas/Article'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/articles/{id}:
+    get:
+      summary: Get article by ID
+      description: Retrieves a specific article by its ID
+      tags:
+        - Articles
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Article ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Article retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Article'
+        '404':
+          description: Article not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: "Article not found"
+                code: "ARTICLE_NOT_FOUND"
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/articles/{id}/content:
+    get:
+      summary: Get article content
+      description: Retrieves the full content of an article
+      tags:
+        - Articles
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Article ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Article content retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content:
+                    type: string
+                    description: Article HTML content
+                  article:
+                    $ref: '#/components/schemas/Article'
+        '404':
+          description: Article not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/articles/{articleId}/vote:
+    post:
+      summary: Vote on article
+      description: Submit a vote (like/dislike) for an article
+      tags:
+        - Articles
+      parameters:
+        - name: articleId
+          in: path
+          required: true
+          description: Article ID
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - voteType
+              properties:
+                voteType:
+                  type: string
+                  enum: [upvote, downvote, removeUpvote, removeDownvote]
+                  description: Type of vote action
+      responses:
+        '200':
+          description: Vote recorded successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  likeCount:
+                    type: integer
+                  dislikeCount:
+                    type: integer
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          description: Article not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/analytics/read:
+    post:
+      summary: Track article read
+      description: Records that an article has been read by a user
+      tags:
+        - Analytics
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - articleId
+              properties:
+                articleId:
+                  type: string
+                  description: ID of the article that was read
+                platform:
+                  type: string
+                  enum: [ios, android, web]
+                  description: Platform where article was read
+                deviceId:
+                  type: string
+                  description: Unique device identifier (hashed)
+      responses:
+        '200':
+          description: Read event recorded successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/analytics:
+    get:
+      summary: Get analytics data
+      description: Retrieves analytics data for articles
+      tags:
+        - Analytics
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of records to return
+          schema:
+            type: integer
+            default: 100
+        - name: articleId
+          in: query
+          description: Filter by specific article ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Analytics data retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  analytics:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AnalyticsRecord'
+                  count:
+                    type: integer
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/notification/register:
+    post:
+      summary: Register for push notifications
+      description: Registers a device for push notifications
+      tags:
+        - Notifications
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - expoPushToken
+              properties:
+                expoPushToken:
+                  type: string
+                  description: Expo push notification token
+                platform:
+                  type: string
+                  enum: [ios, android]
+                  description: Device platform
+                deviceId:
+                  type: string
+                  description: Unique device identifier
+      responses:
+        '200':
+          description: Registration successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/notification/unregister:
+    post:
+      summary: Unregister from push notifications
+      description: Unregisters a device from push notifications
+      tags:
+        - Notifications
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - expoPushToken
+              properties:
+                expoPushToken:
+                  type: string
+                  description: Expo push notification token to unregister
+      responses:
+        '200':
+          description: Unregistration successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/notification/send:
+    post:
+      summary: Send push notification
+      description: Triggers sending of push notifications to all registered devices
+      tags:
+        - Notifications
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                  description: Notification title (optional, will use today's article)
+                body:
+                  type: string
+                  description: Notification body (optional, will use today's article)
+                data:
+                  type: object
+                  description: Additional notification data
+      responses:
+        '200':
+          description: Notification sent successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  taskId:
+                    type: string
+                    description: ID of the background task processing notifications
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/notification/stats:
+    get:
+      summary: Get notification statistics
+      description: Retrieves statistics about registered notification tokens
+      tags:
+        - Notifications
+      responses:
+        '200':
+          description: Statistics retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  activeTokens:
+                    type: integer
+                    description: Number of active notification tokens
+                  inactiveTokens:
+                    type: integer
+                    description: Number of inactive notification tokens
+                  platformStats:
+                    type: object
+                    properties:
+                      ios:
+                        type: integer
+                      android:
+                        type: integer
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/parse:
+    post:
+      summary: Parse article content
+      description: Parses content from a given URL
+      tags:
+        - Content
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - url
+              properties:
+                url:
+                  type: string
+                  format: uri
+                  description: URL to parse content from
+      responses:
+        '200':
+          description: Content parsed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  title:
+                    type: string
+                  content:
+                    type: string
+                  excerpt:
+                    type: string
+                  author:
+                    type: string
+                  publishDate:
+                    type: string
+                  estimatedReadTime:
+                    type: integer
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/articles/generate-summary:
+    post:
+      summary: Generate AI summary
+      description: Generates an AI-powered summary for an article
+      tags:
+        - Content
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - articleId
+              properties:
+                articleId:
+                  type: string
+                  description: ID of the article to summarize
+      responses:
+        '200':
+          description: Summary generated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  summary:
+                    type: string
+                    description: Generated summary
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          description: Article not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/articles/generate-translation:
+    post:
+      summary: Generate article translation
+      description: Generates a translation of an article to a specified language
+      tags:
+        - Content
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - articleId
+                - language
+              properties:
+                articleId:
+                  type: string
+                  description: ID of the article to translate
+                language:
+                  type: string
+                  enum: [it, es, de, fr]
+                  description: Target language code
+      responses:
+        '200':
+          description: Translation generated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  translation:
+                    type: string
+                    description: Translated content
+                  language:
+                    type: string
+                    description: Target language
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          description: Article not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/articles/generate-podcast:
+    post:
+      summary: Generate podcast audio
+      description: Generates an audio podcast version of an article
+      tags:
+        - Content
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - articleId
+              properties:
+                articleId:
+                  type: string
+                  description: ID of the article to convert to podcast
+                forceRegenerate:
+                  type: boolean
+                  default: false
+                  description: Whether to regenerate if podcast already exists
+                debug:
+                  type: boolean
+                  default: false
+                  description: Enable debug mode
+      responses:
+        '200':
+          description: Podcast generation initiated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  taskId:
+                    type: string
+                    description: ID of the background generation task
+                  podcastUrl:
+                    type: string
+                    nullable: true
+                    description: URL of existing podcast (if available)
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          description: Article not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  securitySchemes:
+    AccessToken:
+      type: apiKey
+      in: header
+      name: x-access-token
+      description: Access token for API authentication
+
+  schemas:
+    Article:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique article identifier
+        title:
+          type: string
+          description: Article title
+        url:
+          type: string
+          format: uri
+          description: Original article URL
+        description:
+          type: string
+          description: Article description/excerpt
+        routineDay:
+          type: string
+          format: date
+          description: Date assigned for reading routine (YYYY-MM-DD)
+        estimatedReadTime:
+          type: integer
+          description: Estimated reading time in minutes
+        source:
+          type: string
+          description: Article source/publication
+        tags:
+          type: array
+          items:
+            type: string
+          description: Article tags
+        author:
+          type: string
+          description: Article author
+        needsJavascript:
+          type: boolean
+          description: Whether article requires JavaScript to display properly
+        readCount:
+          type: integer
+          description: Number of times article has been read
+        likeCount:
+          type: integer
+          description: Number of likes
+        dislikeCount:
+          type: integer
+          description: Number of dislikes
+        podcastUrl:
+          type: string
+          nullable: true
+          description: URL to generated podcast audio file
+        podcastStatus:
+          type: string
+          enum: [PENDING, PROCESSING, COMPLETED, FAILED]
+          description: Status of podcast generation
+        podcastGeneratedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When podcast was generated
+        podcastError:
+          type: string
+          nullable: true
+          description: Error message if podcast generation failed
+      required:
+        - id
+        - title
+        - url
+        - routineDay
+        - estimatedReadTime
+        - tags
+
+    AnalyticsRecord:
+      type: object
+      properties:
+        articleId:
+          type: string
+          description: ID of the article
+        platform:
+          type: string
+          enum: [ios, android, web]
+          description: Platform where read occurred
+        timestamp:
+          type: string
+          format: date-time
+          description: When the read occurred
+        deviceId:
+          type: string
+          description: Hashed device identifier
+      required:
+        - articleId
+        - platform
+        - timestamp
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Human-readable error message
+        code:
+          type: string
+          description: Machine-readable error code
+        message:
+          type: string
+          description: Additional error details
+        timestamp:
+          type: string
+          format: date-time
+          description: When the error occurred
+      required:
+        - error
+        - code
+
+  responses:
+    ValidationError:
+      description: Validation error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            missing_field:
+              value:
+                error: "Missing required field: articleId"
+                code: "VALIDATION_ERROR"
+            invalid_format:
+              value:
+                error: "Invalid URL format"
+                code: "INVALID_FORMAT"
+
+    InternalServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "Internal server error"
+            code: "INTERNAL_ERROR"
+            message: "An unexpected error occurred"
+
+  examples:
+    TodayArticle:
+      summary: Example of today's article response
+      value:
+        article:
+          id: "article-123"
+          title: "Understanding React Hooks"
+          url: "https://example.com/react-hooks"
+          description: "A comprehensive guide to React Hooks and their usage patterns."
+          routineDay: "2024-01-15"
+          estimatedReadTime: 8
+          source: "React Blog"
+          tags: ["react", "javascript", "hooks"]
+          author: "Jane Developer"
+          needsJavascript: false
+          readCount: 42
+          likeCount: 15
+          dislikeCount: 2
+          podcastUrl: "https://storage.example.com/podcasts/article-123.mp3"
+          podcastStatus: "COMPLETED"
+        routineDay: "2024-01-15"
+        requestedDate: "2024-01-15"
+
+    ArticlesList:
+      summary: Example of articles list response
+      value:
+        articles:
+          - id: "article-124"
+            title: "Advanced TypeScript Patterns"
+            url: "https://example.com/typescript-patterns"
+            description: "Exploring advanced TypeScript patterns for better code."
+            routineDay: "2024-01-14"
+            estimatedReadTime: 12
+            source: "TypeScript Weekly"
+            tags: ["typescript", "patterns", "advanced"]
+            author: "John TypeScript"
+            needsJavascript: false
+            readCount: 28
+            likeCount: 8
+            dislikeCount: 1
+            podcastUrl: null
+            podcastStatus: "PENDING"
+        count: 1
+        hasNextPage: true
+        nextCursor: "eyJpZCI6ImFydGljbGUtMTI0Iiwicm91dGluZURheSI6IjIwMjQtMDEtMTQifQ=="
+        limit: 20
+
+tags:
+  - name: System
+    description: System health and status endpoints
+  - name: Articles
+    description: Article management and retrieval
+  - name: Analytics
+    description: Usage analytics and tracking
+  - name: Notifications
+    description: Push notification management
+  - name: Content
+    description: Content processing and generation

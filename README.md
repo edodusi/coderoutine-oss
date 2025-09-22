@@ -60,11 +60,30 @@ This app follows a clean architecture pattern with:
 - **Frontend**: React Native with Expo
 - **State Management**: React Context + Hooks
 - **Local Storage**: AsyncStorage with structured data
-- **Backend**: RESTful API (bring your own backend)
-- **Database**: Compatible with any REST API backend
-- **Authentication**: Token-based API access
-- **Notifications**: Expo Push Notifications
-- **Analytics**: Custom tracking system
+- **Primary Database**: Firebase (user data, settings, progress)
+- **Content Management**: RESTful API (articles, notifications)
+- **Authentication**: No authentication required, the app is fully functional without accounts
+- **Push Notifications**: Expo Push Notifications
+- **Analytics**: Firebase Crashlytics for logging errors plus custom read counts and likes (anonymous)
+
+### Architecture Overview
+
+The app uses a **hybrid architecture** that combines Firebase for user data management with a custom REST API for content management:
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   React Native  │    │    Firebase     │    │   Google Cloud  │
+│   Mobile App    │◄──►│   (User Data)   │    │  (Content Mgmt) │
+│                 │    │                 │    │                 │
+│ • UI Components │    │ • Articles R    │    │ • Articles R/W  │
+│ • Local Storage │    │ • Reading Stats │    │ • Notifications │
+│ • State Mgmt    │    │ • Sync Data     │    │ • AI Gen        │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+```
+
+**Firebase handles**: Article content delivery, stats, and push notification tokens.
+
+**REST API handles**: Article management, content generation (summaries, translations, podcasts), push notifications triggers and admin functions.
 
 ## 🚀 Quick Start
 
@@ -113,56 +132,202 @@ EXPO_PUBLIC_REVENUECAT_APPLE_API_KEY=appl_your_key
 EXPO_PUBLIC_REVENUECAT_GOOGLE_API_KEY=goog_your_key
 ```
 
-### Backend Setup
+### Setup Guide
 
-This app is designed to work with any backend that implements the required API endpoints. You can:
+#### 1. Firebase Setup (Required)
 
-1. **Use your existing API**
-   - Implement the required endpoints (see API specification below)
-   - Configure the base URL and authentication
+1. **Create a Firebase project**
+   ```bash
+   # Visit https://console.firebase.google.com
+   # Create new project
+   # Enable Authentication, Firestore, and Cloud Messaging
+   ```
 
-2. **Build a simple backend**
-   - Use any technology stack (Node.js, Python, PHP, etc.)
-   - Implement the REST API endpoints
-   - Store data in your preferred database
+2. **Configure Authentication**
+   ```bash
+   # Enable Email/Password and Google Sign-In
+   # Configure OAuth settings for your domain
+   ```
+
+3. **Setup Firestore Database**
+   ```bash
+   # Create Firestore database in production mode
+   # Use the database structure provided above
+   ```
+
+4. **Get Firebase configuration**
+   ```bash
+   # Project Settings > General > Your apps
+   # Copy the config object values to your .env file
+   ```
+
+#### 2. Content API Setup (Optional)
+
+The REST API is **optional** and only needed for content management and advanced features. The app works fully with just Firebase.
+
+**When you need the REST API:**
+- Adding new articles programmatically
+- Push notification management
+- AI features (podcasts, translations, summaries)
+- Administrative dashboards
+
+**Implementation options:**
+1. **Use the provided OpenAPI spec**
+   - Implement endpoints from `api-spec.yaml`
+   - Focus on articles and notifications endpoints
+
+2. **Simple backend options**
+   - Node.js with Express + your preferred database
+   - Python with FastAPI or Django
+   - PHP with Laravel or Slim
+   - Any REST API framework
 
 3. **Mock API for development**
-   - Use tools like JSON Server or MSW
+   - Use JSON Server with the provided schema
    - Perfect for testing and development
 
-### API Endpoints Required
+**Without the REST API**: You can manually add articles directly to Firebase Firestore and the app will work perfectly.
 
-Your backend should implement these endpoints:
+## 📋 Firebase Database Structure
 
+The app uses Firebase Firestore with the following collections and document structure:
+
+### Collections
+
+#### `articles` collection
+```typescript
+// articles/{articleId}
+{
+  id: string,
+  title: string,
+  url: string,
+  routineDay: string,           // ISO date string (YYYY-MM-DD)
+  tags: string[],
+  estimatedReadTime: number,    // in minutes
+  description?: string,
+  author?: string,
+  source?: string,
+  content?: string,
+  needsJavascript?: boolean,    // Whether article requires JavaScript
+  isActive: boolean,            // Whether article is active/published
+  readCount?: number,           // Number of times read
+  likeCount?: number,           // Number of likes
+  dislikeCount?: number,        // Number of dislikes
+  podcastUrl?: string,          // URL to generated podcast MP3
+  podcastStatus?: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED'
+}
 ```
-GET  /api/articles/today          # Get today's article
-GET  /api/articles               # Get articles with pagination
-GET  /api/articles/:id           # Get specific article
-POST /api/analytics/read         # Track article reads
-POST /api/articles/:id/vote      # Vote on articles
-POST /api/notification/register  # Register for notifications
-POST /api/notification/unregister # Unregister from notifications
+
+#### `analytics` collection
+```typescript
+// analytics/{analyticsId}
+{
+  articleId: string,
+  platform: 'ios' | 'android',
+  timestamp: timestamp,         // Firestore server timestamp
+  userAgent: string
+}
 ```
 
-### Example API Response Format
+#### `beta_users` collection
+```typescript
+// beta_users/{deviceId}
+{
+  appId: string,                           // Unique device identifier
+  firstStartupTimestamp: timestamp,        // First app launch
+  subscriptionStart?: number,              // Unix timestamp
+  subscriptionEnd?: number,                // Unix timestamp
+  betaStatus: number                       // 0 = not beta, 1 = beta active
+}
+```
 
+## 📡 REST API Documentation
+
+The REST API handles content management and administrative functions. See [`api-spec.yaml`](./api-spec.yaml) for the complete OpenAPI 3.0 specification.
+
+### Core Endpoints
+
+#### Articles Management
+```typescript
+GET  /api/articles/today           // Get today's featured article
+GET  /api/articles                // Get paginated articles list
+GET  /api/articles/{id}            // Get specific article details
+GET  /api/articles/{id}/content    // Get article full content
+POST /api/articles                 // Create new article (admin)
+POST /api/articles/{id}/vote       // Submit article rating
+```
+
+#### Content Generation
+```typescript
+POST /api/parse                           // Parse content from URL
+POST /api/articles/generate-summary       // Generate AI summary
+POST /api/articles/generate-translation   // Translate article
+POST /api/articles/generate-podcast       // Generate audio version
+```
+
+#### Analytics & Notifications
+```typescript
+POST /api/analytics/read              // Track article read
+GET  /api/analytics                  // Get analytics data
+POST /api/notification/register      // Register for push notifications
+POST /api/notification/unregister    // Unregister from notifications
+POST /api/notification/send          // Send push notification (admin)
+```
+
+### Authentication
+
+All API endpoints require an access token in the header:
+```typescript
+headers: {
+  'x-access-token': 'your-secure-access-token',
+  'Content-Type': 'application/json'
+}
+```
+
+### Example Responses
+
+#### Today's Article
 ```json
-// GET /api/articles/today
 {
   "article": {
     "id": "article-123",
     "title": "Understanding React Hooks",
     "url": "https://example.com/article",
-    "description": "Learn about React Hooks...",
+    "description": "Learn about React Hooks and their usage patterns...",
     "routineDay": "2024-01-15",
     "estimatedReadTime": 8,
     "tags": ["react", "javascript", "hooks"],
     "author": "Jane Developer",
-    "source": "Dev Blog"
+    "source": "React Blog",
+    "readCount": 42,
+    "likeCount": 15,
+    "dislikeCount": 2,
+    "podcastUrl": "https://{podcast-url}.mp3",
+    "podcastStatus": "COMPLETED"
   },
   "routineDay": "2024-01-15"
 }
 ```
+
+### Advanced Features
+
+#### Podcast Generation
+The API supports generating audio versions of articles:
+- Asynchronous processing with status tracking
+- Multiple language support
+- Background generation with webhooks
+
+#### Content Translation
+Multi-language support for articles:
+- Supported languages: Italian, Spanish, German, French
+- AI-powered translations
+- Cached results for performance
+
+#### Analytics Tracking
+Privacy-first analytics system:
+- Tracks reading patterns without PII
+- Platform-specific metrics (iOS/Android/Web)
+- Hashed device identifiers for privacy
 
 ## 🛠️ Development
 
@@ -263,6 +428,23 @@ npx expo start
 
 ## 🔧 Customization
 
+### Firebase Configuration
+
+Customize Firebase behavior in `src/config/firebase.ts`:
+
+```typescript
+// Firestore collections and subcollections
+export const COLLECTIONS = {
+  USERS: 'users',
+  READING_STATS: 'readingStats',
+  READ_ARTICLES: 'readArticles',
+  SETTINGS: 'settings'
+};
+
+// Custom Firestore rules
+// Configure in Firebase Console > Firestore Database > Rules
+```
+
 ### Theming
 
 The app supports custom themes. Modify `src/context/ThemeContext.tsx`:
@@ -295,22 +477,26 @@ const themes = {
 1. Create components in `src/components/`
 2. Add screens in `src/screens/`
 3. Update navigation in `src/components/Navigation.tsx`
-4. Add types in `src/types/`
-5. Write tests for new functionality
+4. Add Firebase collections if needed
+5. Update API endpoints if required
+6. Add types in `src/types/`
+7. Write tests for new functionality
 
 ### Storage Customization
 
-Modify storage behavior in `src/services/storageService.ts`:
+The app uses both Firebase and local storage:
 
 ```typescript
-// Add new storage keys
+// Local storage (AsyncStorage)
+// Modify in src/services/storageService.ts
 const STORAGE_KEYS = {
   CUSTOM_DATA: 'custom_data',
   // ... existing keys
 };
 
-// Add new storage methods
-async saveCustomData(data: CustomData): Promise<void> {
+// Firebase storage
+// Add new collections in src/services/firebaseService.ts
+async saveUserData(userId: string, data: UserData): Promise<void> {
   // Implementation
 }
 ```
