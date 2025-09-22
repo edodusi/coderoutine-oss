@@ -10,6 +10,18 @@
 
 > A beautifully crafted React Native app for building daily coding routines with articles, progress tracking, and community features.
 
+## 🚀 Try It Now
+
+<p align="center">
+  <a href="https://play.google.com/store/apps/details?id=com.edodusi.coderoutine">
+    <img alt="Get it on Google Play" src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" width="200"/>
+  </a>
+</p>
+
+<p align="center">
+  <strong>Download and try the live version of this app!</strong>
+</p>
+
 ## ✨ Features
 
 - **📚 Daily Articles**: Curated coding articles delivered daily
