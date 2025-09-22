@@ -27,7 +27,19 @@
 
 ## 📱 Screenshots
 
-*Screenshots coming soon - feel free to contribute some!*
+<p align="center">
+  <img src="docs/CodeRoutine-8.png" width="200" alt="CodeRoutine Screenshot 8"/>
+  <img src="docs/CodeRoutine-9.png" width="200" alt="CodeRoutine Screenshot 9"/>
+  <img src="docs/CodeRoutine-10.png" width="200" alt="CodeRoutine Screenshot 10"/>
+  <img src="docs/CodeRoutine-11.png" width="200" alt="CodeRoutine Screenshot 11"/>
+</p>
+
+<p align="center">
+  <img src="docs/CodeRoutine-12.png" width="200" alt="CodeRoutine Screenshot 12"/>
+  <img src="docs/CodeRoutine-13.png" width="200" alt="CodeRoutine Screenshot 13"/>
+  <img src="docs/CodeRoutine-14.png" width="200" alt="CodeRoutine Screenshot 14"/>
+  <img src="docs/CodeRoutine-15.png" width="200" alt="CodeRoutine Screenshot 15"/>
+</p>
 
 ## 🏗️ Architecture
 
@@ -460,7 +472,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 📈 Roadmap
 
 - [ ] Web version optimization
-- [ ] Enhanced offline capabilities  
+- [ ] Enhanced offline capabilities
 - [ ] Plugin system for custom backends
 - [ ] Advanced theming system
 - [ ] Accessibility improvements
