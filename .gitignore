@@ -1,0 +1,89 @@
+# Node modules
+node_modules/
+
+# Expo
+.expo/
+.expo-shared/
+
+# macOS
+.DS_Store
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+expo-debug.log*
+
+# Build output
+dist/
+build/
+web-build/
+
+# Environment files
+.env
+.env.*
+
+# Metro bundler cache
+metro-cache/
+.cache/
+
+# Watchman
+.watchmanconfig
+
+# VSCode
+.vscode/
+
+# Android/iOS
+/android
+/ios
+
+# Misc
+*.log
+
+# Native
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# local env files
+**/.env*.local
+**/.env
+**/.env.development
+**/.env.production
+
+# Firebase credentials and config files
+firebase-debug.log
+firestore-debug.log
+
+# typescript
+*.tsbuildinfo
+
+# temporary development files
+*.tmp
+*.temp
+*-temp.*
+*-cache.*
+test-*.js
+debug-*.js
+clear-*.js
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# logs
+*.log
+logs/
+
+# Google credentials
+coderoutine-edo-*.json
+
+# Builds
+*.apk
+*.aab

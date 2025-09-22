@@ -1,0 +1,67 @@
+{
+  "expo": {
+    "name": "CodeRoutine",
+    "slug": "coderoutine",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.yourcompany.coderoutine",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "package": "com.yourcompany.coderoutine",
+      "googleServicesFile": "./google-services.json",
+      "notification": {
+        "icon": "./assets/notification-icon.png",
+        "color": "#C29AE3"
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "@react-native-firebase/app",
+      "@react-native-firebase/crashlytics",
+      [
+        "expo-iap",
+        {
+          "android": {
+            "enableBilling": true
+          },
+          "ios": {
+            "enableSubscriptions": true
+          }
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#C29AE3",
+          "defaultChannel": "daily-articles"
+        }
+      ],
+      "expo-audio"
+    ],
+    "extra": {
+      "apiBaseUrl": "https://your-api-url.com",
+      "useLocalApi": "false"
+    }
+  }
+}
