@@ -8,6 +8,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
+import Constants from 'expo-constants';
 
 const AboutScreen: React.FC = () => {
   const { theme, isDarkMode } = useTheme();
@@ -114,20 +115,20 @@ const AboutScreen: React.FC = () => {
 
   const comingSoonFeatures = [
     {
-      icon: 'logo-apple',
-      text: 'A native iOS app with full feature parity.',
-    },
-    {
       icon: 'cloud-outline',
       text: 'Sync your reading history and favorites across devices.',
     },
     {
       icon: 'people-outline',
-      text: 'Social learning to share streaks and compete with friends.',
+      text: 'Social features to learn with friends.',
     },
     {
       icon: 'chatbubbles-outline',
       text: 'Discuss articles and ask questions with an AI assistant.',
+    },
+    {
+      icon: 'lock-closed-outline',
+      text: 'Exclusive content for premium members.',
     },
   ];
 
@@ -156,10 +157,9 @@ const AboutScreen: React.FC = () => {
             resizeMode="contain"
           />
         </View>
-        <Text style={styles.appVersion}>Version 1.0.0-beta</Text>
+        <Text style={styles.appVersion}>Version {Constants.expoConfig?.version || '1.0.0'}</Text>
         <Text style={styles.description}>
           CodeRoutine helps you grow your skills sustainably by delivering one high-quality technical article each day.
-          Our mission is to make learning a habit, not a chore.
         </Text>
       </View>
 
@@ -237,8 +237,7 @@ const AboutScreen: React.FC = () => {
       {/* Footer */}
       <View style={styles.footer}>
         <Text style={styles.footerText}>
-          Made with ❤️ by Edo for the global developer community.{'\n'}
-          "The best time to plant a tree was 20 years ago. The second best time is now."
+          Made with ❤️ by Edo for the global developer community.
         </Text>
       </View>
     </ScrollView>

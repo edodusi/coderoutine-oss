@@ -1158,7 +1158,6 @@ const ArticleScreen: React.FC<ArticleScreenProps> = React.memo(({ route }) => {
       allowsFullscreenVideo={false}
       androidLayerType="hardware"
       mixedContentMode="compatibility"
-
       onShouldStartLoadWithRequest={(_request) => {
         return true;
       }}
