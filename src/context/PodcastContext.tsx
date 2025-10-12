@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useReducer, useCallback, ReactNode, useRef } from 'react';
-import { useAudioPlayer, useAudioPlayerStatus, AudioSource, setAudioModeAsync } from 'expo-audio';
+import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
@@ -145,13 +145,14 @@ export const PodcastProvider: React.FC<PodcastProviderProps> = ({ children }) =>
   const currentArticle = app.state.currentArticle;
   const autoPlayTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const autoPlayCancelRef = useRef<boolean>(false);
+  const notificationUpdateRef = useRef<((isPlaying: boolean, title: string, position?: number, duration?: number) => Promise<void>) | null>(null);
 
   // Create audio player with dynamic source
   const audioSource = state.currentPodcastUrl ? { uri: state.currentPodcastUrl } : null;
   const player = useAudioPlayer(audioSource, {
     updateInterval: 1000,
   });
-  
+
   // Get player status
   const playerStatus = useAudioPlayerStatus(player);
 
@@ -167,28 +168,55 @@ export const PodcastProvider: React.FC<PodcastProviderProps> = ({ children }) =>
 
         // Configure notifications for media controls
         if (Platform.OS === 'android') {
-          await Notifications.setNotificationChannelAsync('podcast', {
-            name: 'Podcast Player',
-            importance: Notifications.AndroidImportance.LOW,
+          // Delete old 'podcast' channel if it exists (cleanup from previous version)
+          try {
+            await Notifications.deleteNotificationChannelAsync('podcast');
+          } catch (_error) {
+            // Channel might not exist, ignore error
+          }
+
+          // Delete and recreate the podcast-player channel to update importance
+          // (Android doesn't allow changing importance after channel is created)
+          try {
+            await Notifications.deleteNotificationChannelAsync('podcast-player');
+          } catch (_error) {
+            // Channel might not exist, ignore error
+          }
+
+          await Notifications.setNotificationChannelAsync('podcast-player', {
+            name: 'Podcast Media Player',
+            importance: Notifications.AndroidImportance.HIGH,
             sound: null,
             vibrationPattern: [],
             enableLights: false,
             enableVibrate: false,
             showBadge: false,
+            lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
           });
         }
 
-        // Set notification handler
+        // Set notification handler to show notifications even when app is open
         Notifications.setNotificationHandler({
-          handleNotification: async () => ({
-            shouldShowAlert: false,
-            shouldPlaySound: false,
-            shouldSetBadge: false,
-            shouldShowBanner: false,
-            shouldShowList: false,
-          }),
+          handleNotification: async (notification) => {
+            // Always show media control notifications
+            if (notification.request.content.data?.type === 'media_control') {
+              return {
+                shouldPlaySound: false,
+                shouldSetBadge: false,
+                shouldShowBanner: true,
+                shouldShowList: true,
+              };
+            }
+            return {
+              shouldPlaySound: false,
+              shouldSetBadge: false,
+              shouldShowBanner: false,
+              shouldShowList: false,
+            };
+          },
         });
 
+        // Notification response handler will be set up separately after functions are defined
 
       } catch (error) {
         console.error('Error initializing audio and notifications:', error);
@@ -203,32 +231,44 @@ export const PodcastProvider: React.FC<PodcastProviderProps> = ({ children }) =>
     if (playerStatus && state.currentPodcastUrl) {
       const isLoaded = playerStatus.isLoaded && playerStatus.duration > 0;
       const wasLoaded = state.isLoaded;
-      
+      const wasPlaying = state.isPlaying;
+      const isNowPlaying = playerStatus.playing;
 
-      
       dispatch({ type: 'SET_LOADED', payload: isLoaded });
       dispatch({ type: 'SET_PLAYING', payload: playerStatus.playing });
       dispatch({ type: 'SET_BUFFERING', payload: playerStatus.isBuffering });
       dispatch({ type: 'SET_DURATION', payload: playerStatus.duration ? playerStatus.duration * 1000 : null });
       dispatch({ type: 'SET_POSITION', payload: playerStatus.currentTime * 1000 });
 
+      // Update notification only when playback state changes (not continuously)
+      // Don't update if player is being released (user pressed stop)
+      if (isLoaded && wasPlaying !== isNowPlaying && !state.isPlayerReleased) {
+        // Call notification update via ref to avoid circular dependency
+        if (notificationUpdateRef.current) {
+          notificationUpdateRef.current(
+            isNowPlaying,
+            state.currentArticleTitle || 'Podcast'
+          );
+        }
+      }
+
       // Auto-play when audio becomes loaded for the first time (only if user-initiated)
       if (isLoaded && !wasLoaded && !playerStatus.playing && state.isUserInitiated) {
 
-        
+
         // Clear any existing timeout and reset cancellation flag
         if (autoPlayTimeoutRef.current) {
           clearTimeout(autoPlayTimeoutRef.current);
         }
         autoPlayCancelRef.current = false;
-        
+
         autoPlayTimeoutRef.current = setTimeout(() => {
           try {
             // Check cancellation flag first
             if (autoPlayCancelRef.current) {
               return;
             }
-            
+
             // Check if player is still valid and state allows playback
             if (player && state.currentPodcastUrl && state.isPlayerVisible && !state.isPlayerReleased) {
               player.play();
@@ -243,10 +283,8 @@ export const PodcastProvider: React.FC<PodcastProviderProps> = ({ children }) =>
 
       // Check if podcast finished
       if (playerStatus.didJustFinish) {
-        console.log("Podcast finished", state.currentArticleId, currentArticle?.id);
         // Mark the article as read when podcast finishes
         if (state.currentArticleId && state.currentArticleId === currentArticle?.id) {
-          console.log("marking article as read");
           markArticleAsRead(state.currentArticleId, currentArticle.tags);
         }
 
@@ -254,7 +292,7 @@ export const PodcastProvider: React.FC<PodcastProviderProps> = ({ children }) =>
         hidePlayer();
       }
     }
-  }, [playerStatus, state.currentArticleId, state.currentPodcastUrl, currentArticle, markArticleAsRead, state.isLoaded, player]);
+  }, [playerStatus, state.currentArticleId, state.currentPodcastUrl, currentArticle, markArticleAsRead, state.isLoaded, player, state.currentArticleTitle]);
 
   // Cleanup auto-play timeout on unmount
   React.useEffect(() => {
@@ -271,10 +309,10 @@ export const PodcastProvider: React.FC<PodcastProviderProps> = ({ children }) =>
   React.useEffect(() => {
     if (state.currentPodcastUrl && player) {
 
-      
+
       // Replace audio source
       player.replace({ uri: state.currentPodcastUrl });
-      
+
       // Enable pitch correction for speed changes
       player.shouldCorrectPitch = true;
     }
@@ -333,6 +371,13 @@ export const PodcastProvider: React.FC<PodcastProviderProps> = ({ children }) =>
 
   const loadPodcast = useCallback(async (url: string, articleId: string, title: string) => {
     try {
+      // Request notification permissions when user starts a podcast
+      const { status: existingStatus } = await Notifications.getPermissionsAsync();
+
+      if (existingStatus !== 'granted') {
+        await Notifications.requestPermissionsAsync();
+      }
+
       dispatch({ type: 'SET_ERROR', payload: null });
       dispatch({ type: 'SET_LOADING', payload: true });
       dispatch({ type: 'SET_LOADED', payload: false });
@@ -357,45 +402,125 @@ export const PodcastProvider: React.FC<PodcastProviderProps> = ({ children }) =>
     }
   }, []);
 
+  // Define notification update function
   const showMediaNotification = useCallback(async (isPlaying: boolean, title: string) => {
     try {
-      if (isPlaying) {
-        await Notifications.scheduleNotificationAsync({
-          content: {
-            title: 'CodeRoutine Podcast',
-            body: title || 'Now Playing',
-            sound: false,
-            priority: Notifications.AndroidNotificationPriority.LOW,
-            sticky: true,
-            data: { type: 'media_control' },
-          },
-          trigger: null,
-          identifier: 'podcast-player',
-        });
-      } else {
-        await Notifications.dismissNotificationAsync('podcast-player');
+      if (Platform.OS !== 'android') {
+        return;
       }
+
+      // Static subtitle
+      const subtitle = 'Now playing on CodeRoutine';
+
+      // Action buttons with minimal icons
+      const playPauseButton = {
+        identifier: 'play-pause',
+        buttonTitle: isPlaying ? '⏸️ Pause' : '▶️ Play',
+        options: {
+          opensAppToForeground: false,
+        },
+      };
+
+      const closeButton = {
+        identifier: 'close',
+        buttonTitle: '⏹️ Stop',
+        options: {
+          opensAppToForeground: false,
+        },
+      };
+
+      // Schedule notification (Android will update existing one with same identifier)
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: title || 'CodeRoutine Podcast',
+          body: subtitle,
+          sound: false,
+          priority: Notifications.AndroidNotificationPriority.DEFAULT,
+          sticky: false, // Allow user to dismiss
+          autoDismiss: !isPlaying, // Auto-dismiss when paused
+          data: {
+            type: 'media_control',
+            isPlaying,
+          },
+          categoryIdentifier: 'podcast-player',
+          ...(Platform.OS === 'android' && {
+            android: {
+              channelId: 'podcast-player',
+              ongoing: true,
+              autoCancel: !isPlaying, // Auto-cancel when paused
+              color: '#007AFF',
+              smallIcon: 'ic_launcher',
+            },
+          }),
+        },
+        trigger: null,
+        identifier: 'podcast-notification',
+      });
+
+      // Set notification category with actions
+      await Notifications.setNotificationCategoryAsync('podcast-player', [
+        playPauseButton,
+        closeButton,
+      ]);
+
     } catch (error) {
       console.error('Error showing media notification:', error);
     }
   }, []);
 
-  const play = useCallback(async () => {
-    console.log("Play function called", { 
-      hasPlayer: !!player, 
-      currentUrl: state.currentPodcastUrl,
-      isLoaded: state.isLoaded 
+  // Store notification function in ref for use in effects
+  React.useEffect(() => {
+    notificationUpdateRef.current = showMediaNotification;
+  }, [showMediaNotification]);
+
+  // Set up notification response listener after functions are defined
+  const pauseRef = useRef<(() => Promise<void>) | null>(null);
+  const playRef = useRef<(() => Promise<void>) | null>(null);
+  const hidePlayerRef = useRef<(() => Promise<void>) | null>(null);
+
+  React.useEffect(() => {
+    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      const action = response.actionIdentifier;
+
+      if (action === 'play-pause') {
+        if (state.isPlaying) {
+          pauseRef.current?.();
+        } else {
+          playRef.current?.();
+        }
+      } else if (action === 'close') {
+        hidePlayerRef.current?.();
+      }
     });
-    
+
+    return () => {
+      subscription.remove();
+    };
+  }, [state.isPlaying]);
+
+  const dismissMediaNotification = useCallback(async () => {
+    try {
+      if (Platform.OS === 'android') {
+        await Notifications.dismissNotificationAsync('podcast-notification');
+      }
+    } catch (error) {
+      console.error('Error dismissing media notification:', error);
+    }
+  }, []);
+
+  const play = useCallback(async () => {
     if (!player) {
-      console.error("No player available");
       return;
     }
 
     try {
       player.play();
 
-      await showMediaNotification(true, state.currentArticleTitle || 'Podcast');
+      // Show notification immediately when play is called
+      await showMediaNotification(
+        true,
+        state.currentArticleTitle || 'Podcast'
+      );
     } catch (error) {
       console.error('Error playing podcast:', error);
       dispatch({
@@ -403,7 +528,12 @@ export const PodcastProvider: React.FC<PodcastProviderProps> = ({ children }) =>
         payload: error instanceof Error ? error.message : 'Failed to play podcast'
       });
     }
-  }, [player, state.currentArticleTitle, state.currentPodcastUrl, state.isLoaded, showMediaNotification]);
+  }, [player, state.currentArticleTitle, showMediaNotification]);
+
+  // Store play function in ref for notification listener
+  React.useEffect(() => {
+    playRef.current = play;
+  }, [play]);
 
   const pause = useCallback(async () => {
     if (!player) return;
@@ -411,7 +541,11 @@ export const PodcastProvider: React.FC<PodcastProviderProps> = ({ children }) =>
     try {
       player.pause();
 
-      await showMediaNotification(false, '');
+      // Update notification when paused
+      await showMediaNotification(
+        false,
+        state.currentArticleTitle || 'Podcast'
+      );
     } catch (error) {
       console.error('Error pausing podcast:', error);
       dispatch({
@@ -419,7 +553,12 @@ export const PodcastProvider: React.FC<PodcastProviderProps> = ({ children }) =>
         payload: error instanceof Error ? error.message : 'Failed to pause podcast'
       });
     }
-  }, [player, showMediaNotification]);
+  }, [player, state.currentArticleTitle, showMediaNotification]);
+
+  // Store pause function in ref for notification listener
+  React.useEffect(() => {
+    pauseRef.current = pause;
+  }, [pause]);
 
   const seekTo = useCallback(async (positionMs: number) => {
     if (!player || !state.duration) return;
@@ -488,7 +627,7 @@ export const PodcastProvider: React.FC<PodcastProviderProps> = ({ children }) =>
     }
 
     // Dismiss media notification
-    await showMediaNotification(false, '');
+    await dismissMediaNotification();
 
     // Clear saved state
     try {
@@ -502,7 +641,12 @@ export const PodcastProvider: React.FC<PodcastProviderProps> = ({ children }) =>
     dispatch({ type: 'RESET_PLAYER' });
     dispatch({ type: 'SET_PLAYER_VISIBLE', payload: false });
     dispatch({ type: 'SET_PLAYER_RELEASED', payload: false });
-  }, [player, showMediaNotification]);
+  }, [player, dismissMediaNotification]);
+
+  // Store hidePlayer function in ref for notification listener
+  React.useEffect(() => {
+    hidePlayerRef.current = hidePlayer;
+  }, [hidePlayer]);
 
   const togglePlayerExpansion = useCallback(() => {
     dispatch({ type: 'SET_PLAYER_EXPANDED', payload: !state.isPlayerExpanded });
@@ -545,6 +689,14 @@ export const PodcastProvider: React.FC<PodcastProviderProps> = ({ children }) =>
     getPlaybackProgress,
     getAvailablePlaybackRates,
   };
+
+  // Cleanup notification on unmount
+  React.useEffect(() => {
+    return () => {
+      // Dismiss notification when component unmounts (app closes)
+      dismissMediaNotification();
+    };
+  }, [dismissMediaNotification]);
 
   return (
     <PodcastContext.Provider value={contextValue}>

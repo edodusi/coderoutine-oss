@@ -268,24 +268,24 @@ describe('StorageService', () => {
   });
 
   describe('isArticleReadable', () => {
-    it('should return true for today\'s article', () => {
+    it('should always return true (articles can be read on any day)', () => {
       const today = new Date();
       const result = storageService.isArticleReadable(today.toISOString());
       expect(result).toBe(true);
     });
 
-    it('should return false for yesterday\'s article', () => {
+    it('should return true for past articles (backlog reading allowed)', () => {
       const yesterday = new Date();
       yesterday.setDate(yesterday.getDate() - 1);
       const result = storageService.isArticleReadable(yesterday.toISOString());
-      expect(result).toBe(false);
+      expect(result).toBe(true);
     });
 
-    it('should return false for future article', () => {
+    it('should return true for future articles', () => {
       const tomorrow = new Date();
       tomorrow.setDate(tomorrow.getDate() + 1);
       const result = storageService.isArticleReadable(tomorrow.toISOString());
-      expect(result).toBe(false);
+      expect(result).toBe(true);
     });
   });
 

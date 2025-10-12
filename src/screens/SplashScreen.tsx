@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -37,156 +37,123 @@ const SplashScreen: React.FC<SplashScreenProps> = ({ onInitializationComplete })
   const [scaleAnim] = useState(new Animated.Value(0.8));
   const [progressAnim] = useState(new Animated.Value(0));
 
-  useEffect(() => {
-    // Start animations
-    Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 800,
-        useNativeDriver: true,
-      }),
-      Animated.spring(scaleAnim, {
-        toValue: 1,
-        tension: 50,
-        friction: 8,
-        useNativeDriver: true,
-      }),
-    ]).start();
+  const animateProgress = useCallback((toValue: number): Promise<void> => {
+    return new Promise((resolve) => {
+      Animated.timing(progressAnim, {
+        toValue,
+        duration: 150, // Reduced from 300ms for faster progress
+        useNativeDriver: false,
+      }).start(() => resolve());
+    });
+  }, [progressAnim]);
 
-    // Start initialization process
-    initializeApp();
-  }, []);
-
-  const initializeApp = async () => {
+  const initializeApp = useCallback(async () => {
     try {
-      // Step 1: Initialize Device ID first
-      setInitializationStep('Initializing device...');
-      await animateProgress(0.1);
-
-      try {
-        const deviceId = await initializeDeviceId();
-        console.log('✅ Device ID initialized:', deviceId);
-      } catch (error) {
-        console.error('❌ Device ID initialization failed:', error);
-        // Continue anyway, fallback will be used
-      }
-
-      // Step 2: Initialize Firebase and Beta Status
-      setInitializationStep('Initializing Firebase...');
+      // Step 1: Critical initialization - Device ID and Firebase (parallel)
+      setInitializationStep('Initializing core services...');
       await animateProgress(0.2);
 
-      let firebaseInitialized = false;
-      try {
-        firebaseInitialized = await firebaseApp.initialize();
-        if (firebaseInitialized) {
-          console.log('✅ Firebase and Crashlytics initialized successfully');
+      const [deviceIdResult, firebaseResult] = await Promise.allSettled([
+        initializeDeviceId(),
+        firebaseApp.initialize()
+      ]);
 
-          // Check if app crashed on previous run
-          try {
-            const didCrash = await firebaseApp.didCrashOnPreviousExecution();
+      // Handle device ID result
+      if (deviceIdResult.status === 'fulfilled') {
+        console.log('✅ Device ID initialized:', deviceIdResult.value);
+      } else {
+        console.error('❌ Device ID initialization failed:', deviceIdResult.reason);
+      }
+
+      // Handle Firebase result and setup background tasks
+      if (firebaseResult.status === 'fulfilled' && firebaseResult.value) {
+        console.log('✅ Firebase and Crashlytics initialized successfully');
+        
+        // Non-blocking: Check crash status in background
+        firebaseApp.didCrashOnPreviousExecution()
+          .then(didCrash => {
             if (didCrash) {
               console.log('App crashed on previous execution - crash report sent');
               firebaseApp.logEvent('app_recovered_from_crash');
             }
-          } catch (crashCheckError) {
-            console.warn('Could not check previous crash status:', crashCheckError);
+          })
+          .catch(err => console.warn('Could not check previous crash status:', err));
+
+        // Non-blocking: Log app launch
+        firebaseApp.logEvent('app_launched', {
+          timestamp: new Date().toISOString(),
+          environment: __DEV__ ? 'development' : 'production'
+        });
+      } else {
+        console.log('Firebase not available - continuing without Crashlytics');
+      }
+
+      // Step 2: Parallel initialization of non-blocking services
+      setInitializationStep('Loading user data...');
+      await animateProgress(0.5);
+
+      // Run beta status, subscription, and notification checks in parallel
+      await Promise.allSettled([
+        // Beta status check
+        (async () => {
+          if (Constants.executionEnvironment === 'storeClient' || Platform.OS === 'web') {
+            console.log('⏭️ Beta status initialization skipped in Expo Go/web');
+            return null;
           }
+          try {
+            const betaStatusService = BetaStatusService.getInstance();
+            const betaStatus = await betaStatusService.initializeBetaStatus();
+            console.log('✅ Beta status initialized:', { betaStatus });
+            return betaStatus;
+          } catch (error) {
+            console.error('❌ Beta status initialization failed:', error);
+            firebaseApp.logError('Beta status initialization failed', error);
+            return null;
+          }
+        })(),
 
-          // Set app launch event
-          firebaseApp.logEvent('app_launched', {
-            timestamp: new Date().toISOString(),
-            environment: __DEV__ ? 'development' : 'production'
-          });
-        } else {
-          console.log('Firebase not available - continuing without Crashlytics');
-        }
-      } catch (firebaseError) {
-        console.warn('Firebase initialization failed (likely running in Expo Go):', firebaseError);
-        firebaseInitialized = false;
-      }
+        // Subscription check
+        (async () => {
+          try {
+            await subscriptionService.initialize();
+            if (subscriptionService.isInitialized) {
+              await subscriptionService.getCustomerInfo();
+              console.log('✅ Subscription status checked successfully');
+            } else {
+              console.log('⚠️ Subscription service not configured - continuing without premium features');
+            }
+          } catch (error) {
+            console.log('⚠️ Subscription check skipped:', error);
+          }
+        })(),
 
-      // Step 3: Initialize Beta Status
-      setInitializationStep('Checking user status...');
-      await animateProgress(0.35);
+        // Notification status
+        (async () => {
+          try {
+            await refreshNotificationStatus();
+            const { status } = await Notifications.getPermissionsAsync();
+            console.log('Current notification permission status:', status);
 
-      try {
-        // Skip beta status initialization in Expo Go
-        if (Constants.executionEnvironment === 'storeClient' || Platform.OS === 'web') {
-          console.log('⏭️ Beta status initialization skipped in Expo Go/web');
-        } else {
-          const betaStatusService = BetaStatusService.getInstance();
-          const betaStatus = await betaStatusService.initializeBetaStatus();
-          console.log('✅ Beta status initialized:', { betaStatus });
-        }
-      } catch (error) {
-        console.error('❌ Beta status initialization failed:', error);
-        firebaseApp.logError('Beta status initialization failed', error);
-        // Continue without beta status
-      }
+            const notificationService = NotificationService.getInstance();
+            const preference = await notificationService.getNotificationPreference();
 
-      // Step 4: Check subscription status
-      setInitializationStep('Checking subscription status...');
-      await animateProgress(0.55);
+            if (preference === true && status === 'granted') {
+              console.log('Ensuring notification setup is complete...');
+              notificationService.setNotificationsEnabled(true);
+            } else if (preference === true && status === 'denied') {
+              console.log('Notification permission was revoked - user will need to re-enable');
+            }
 
-      try {
-        await subscriptionService.initialize();
-        if (subscriptionService.isInitialized) {
-          await subscriptionService.getCustomerInfo();
-          console.log('✅ Subscription status checked successfully');
-        } else {
-          console.log('⚠️ Subscription service not configured - continuing without premium features');
-        }
-      } catch (error) {
-        console.log('⚠️ Subscription check skipped:', error);
-      }
+            console.log('✅ Notification status loaded and synced successfully');
+          } catch (error) {
+            console.warn('Notification status loading warning:', error);
+          }
+        })()
+      ]);
 
-      // Step 5: Load and sync notification status comprehensively
-      setInitializationStep('Loading notification settings...');
-      await animateProgress(0.75);
-
-      try {
-        // Refresh notification status and check for permission changes
-        await refreshNotificationStatus();
-
-        // Additional check: verify if permission status changed while app was closed
-        const { status } = await Notifications.getPermissionsAsync();
-        console.log('Current notification permission status:', status);
-
-        // If we have cached preferences but permission status doesn't match, reconcile
-        const notificationService = NotificationService.getInstance();
-        const preference = await notificationService.getNotificationPreference();
-
-        if (preference === true && status === 'granted') {
-          // User wants notifications and has permission - ensure background setup is complete
-          console.log('Ensuring notification setup is complete...');
-          notificationService.setNotificationsEnabled(true);
-        } else if (preference === true && status === 'denied') {
-          // User wants notifications but lost permission - will need to re-request
-          console.log('Notification permission was revoked - user will need to re-enable');
-        }
-
-        console.log('✅ Notification status loaded and synced successfully');
-      } catch (error) {
-        console.warn('Notification status loading warning:', error);
-        // Don't fail the app if notification status loading fails
-      }
-
-      // Step 6: Clean expired backlog articles
-      setInitializationStep('Cleaning expired articles...');
-      await animateProgress(0.85);
-
-      try {
-        await storageService.cleanExpiredBacklogArticles();
-        console.log('✅ Expired backlog articles cleaned successfully');
-      } catch (error) {
-        console.error('Error cleaning expired backlog articles:', error);
-        firebaseApp.logError('Failed to clean expired backlog articles', error);
-        // Continue even if cleanup fails
-      }
-
-      // Step 7: Fetch today's article
+      // Step 3: Fetch today's article (critical for app functionality)
       setInitializationStep('Fetching today\'s routine...');
-      await animateProgress(0.9);
+      await animateProgress(0.85);
 
       try {
         await fetchTodaysArticle();
@@ -196,12 +163,22 @@ const SplashScreen: React.FC<SplashScreenProps> = ({ onInitializationComplete })
         firebaseApp.logError('Failed to fetch article during splash', error);
       }
 
-      // Step 8: Finalizing
-      setInitializationStep('Almost ready...');
+      // Step 4: Finalize
+      setInitializationStep('Ready!');
       await animateProgress(1.0);
 
-      // Wait a moment before transitioning
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // Defer non-critical cleanup to background (after app loads)
+      setTimeout(() => {
+        storageService.cleanExpiredBacklogArticles()
+          .then(() => console.log('✅ Expired backlog articles cleaned in background'))
+          .catch(error => {
+            console.error('Error cleaning expired backlog articles:', error);
+            firebaseApp.logError('Failed to clean expired backlog articles', error);
+          });
+      }, 1000);
+
+      // Minimal transition delay
+      await new Promise(resolve => setTimeout(resolve, 200)); // Reduced from 500ms
 
       // Complete initialization
       onInitializationComplete();
@@ -213,20 +190,30 @@ const SplashScreen: React.FC<SplashScreenProps> = ({ onInitializationComplete })
       // Even if there's an error, continue to the app
       setInitializationStep('Completing setup...');
       await animateProgress(1.0);
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise(resolve => setTimeout(resolve, 200));
       onInitializationComplete();
     }
-  };
+  }, [animateProgress, fetchTodaysArticle, refreshNotificationStatus, onInitializationComplete]);
 
-  const animateProgress = (toValue: number): Promise<void> => {
-    return new Promise((resolve) => {
-      Animated.timing(progressAnim, {
-        toValue,
-        duration: 300,
-        useNativeDriver: false,
-      }).start(() => resolve());
-    });
-  };
+  useEffect(() => {
+    // Start animations
+    Animated.parallel([
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 500, // Reduced from 800ms
+        useNativeDriver: true,
+      }),
+      Animated.spring(scaleAnim, {
+        toValue: 1,
+        tension: 60, // Increased for faster animation
+        friction: 7, // Reduced for faster animation
+        useNativeDriver: true,
+      }),
+    ]).start();
+
+    // Start initialization process
+    initializeApp();
+  }, [fadeAnim, scaleAnim, initializeApp]);
 
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
@@ -251,12 +238,7 @@ const SplashScreen: React.FC<SplashScreenProps> = ({ onInitializationComplete })
         {/* App Title */}
         <Image
           source={isDarkMode ? require('../../assets/header-dark.png') : require('../../assets/header.png')}
-          style={{
-            height: 50,
-            width: 180,
-            marginLeft: 10,
-            marginBottom: 10,
-          }}
+          style={styles.headerImage}
           resizeMode="contain"
         />
 
@@ -328,6 +310,12 @@ const styles = StyleSheet.create({
     width: 120,
     height: 120,
     borderRadius: 20,
+  },
+  headerImage: {
+    height: 50,
+    width: 180,
+    marginLeft: 10,
+    marginBottom: 10,
   },
   title: {
     fontSize: 32,

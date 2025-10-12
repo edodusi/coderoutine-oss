@@ -8,6 +8,7 @@ import {
   TouchableOpacity,
   Alert,
   Linking,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -26,6 +27,7 @@ import { BetaStatusService } from '../services/beta';
 import { getUniqueDeviceId, getUniqueDeviceIdSync } from '../utils/deviceId';
 import { getAppVersion, getAppBuildNumber } from '../utils/deviceId';
 import { SupportedLanguage, LanguageOption } from '../types';
+import { useAppUpdates } from '../hooks/useAppUpdates';
 
 type SettingsScreenNavigationProp = StackNavigationProp<RootStackParamList, 'Subscription'>;
 
@@ -70,6 +72,16 @@ const SettingsScreen: React.FC = () => {
   const [deviceId, setDeviceId] = useState<string>('Loading...');
   const [devDayOffset, setDevDayOffset] = useState<number>(0);
   const [currentDevArticleInfo, setCurrentDevArticleInfo] = useState<string>('Today');
+  const [devSimulateUpdate, setDevSimulateUpdate] = useState(false);
+
+  // App updates
+  const {
+    isUpdatesEnabled,
+    isUpdateReady,
+    checkForUpdate,
+    reloadApp,
+  } = useAppUpdates();
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
 
   // Get bundle version
   const bundleVersion = getAppVersion();
@@ -142,6 +154,22 @@ const SettingsScreen: React.FC = () => {
     }
   };
 
+  const handleDevSimulateUpdateToggle = async (value: boolean) => {
+    if (!__DEV__) return;
+
+    try {
+      await storageService.set('dev_simulate_update', value ? 'true' : 'false');
+      setDevSimulateUpdate(value);
+      if (value) {
+        showSuccessToast('✅ Update notification shown! Check top of screen');
+      } else {
+        showSuccessToast('Update notification hidden');
+      }
+    } catch (_error) {
+      Alert.alert('Error', 'Failed to toggle update simulation');
+    }
+  };
+
   // Load device ID on component mount
   useEffect(() => {
     const loadDeviceId = async () => {
@@ -165,6 +193,20 @@ const SettingsScreen: React.FC = () => {
   }, []);
 
   // Refresh subscription status when settings screen is focused
+  // Load dev simulate update state
+  useEffect(() => {
+    const loadDevSimulateUpdate = async () => {
+      if (!__DEV__) return;
+      try {
+        const value = await storageService.get('dev_simulate_update');
+        setDevSimulateUpdate(value === 'true');
+      } catch (_error) {
+        // Ignore errors, defaults to false
+      }
+    };
+    loadDevSimulateUpdate();
+  }, []);
+
   useFocusEffect(
     React.useCallback(() => {
       console.log('Settings screen focused - refreshing subscription status');
@@ -955,6 +997,63 @@ const SettingsScreen: React.FC = () => {
           </Text>
         </View>
 
+        {/* Check for Updates Button - Only in production */}
+        {isUpdatesEnabled && !__DEV__ && (
+          <>
+            {isUpdateReady ? (
+              <TouchableOpacity
+                style={[styles.button, { marginTop: 16, backgroundColor: theme.colors.primary }]}
+                onPress={reloadApp}
+              >
+                <Text style={styles.buttonText}>✨ Update Available - Reload Now</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={[
+                  styles.button,
+                  isCheckingUpdate && styles.buttonDisabled,
+                  { marginTop: 16 }
+                ]}
+                onPress={async () => {
+                  setIsCheckingUpdate(true);
+                  try {
+                    await checkForUpdate();
+                    // User will be notified via banner when update is ready
+                    // If no update, show toast
+                    setTimeout(() => {
+                      if (!isUpdateReady) {
+                        showSuccessToast('✅ App is up to date!');
+                      }
+                    }, 1000);
+                  } catch (_error) {
+                    Alert.alert('Error', 'Failed to check for updates');
+                  } finally {
+                    setIsCheckingUpdate(false);
+                  }
+                }}
+                disabled={isCheckingUpdate}
+              >
+                {isCheckingUpdate ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                    <Text style={styles.buttonText}>🔍 Checking...</Text>
+                  </View>
+                ) : (
+                  <Text style={styles.buttonText}>🔍 Check for Updates</Text>
+                )}
+              </TouchableOpacity>
+            )}
+          </>
+        )}
+
+        {/* Dev mode info about updates */}
+        {__DEV__ && (
+          <Text style={[styles.description, { marginTop: 16, fontStyle: 'italic' }]}>
+            💡 EAS Updates are disabled in development mode. Use the "Simulate Update Notification"
+            toggle below to test the update banner UI.
+          </Text>
+        )}
+
         {/* Expo Push Token (DEV mode only) */}
         {__DEV__ && (
           <>
@@ -1056,6 +1155,22 @@ const SettingsScreen: React.FC = () => {
                   </TouchableOpacity>
                 ))}
               </View>
+            </View>
+
+            {/* Simulate Update Notification */}
+            <View style={styles.settingItem}>
+              <View style={styles.settingLabelContainer}>
+                <Text style={styles.settingLabel}>Simulate Update Notification</Text>
+                <Text style={[styles.settingDescription, { color: theme.colors.textSecondary }]}>
+                  Test the update banner UI (dev only)
+                </Text>
+              </View>
+              <Switch
+                value={devSimulateUpdate}
+                onValueChange={handleDevSimulateUpdateToggle}
+                trackColor={{ false: theme.colors.disabled, true: theme.colors.success }}
+                thumbColor={devSimulateUpdate ? theme.colors.background : theme.colors.placeholder}
+              />
             </View>
           </View>
         )}

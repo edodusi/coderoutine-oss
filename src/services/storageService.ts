@@ -588,9 +588,17 @@ class StorageService {
 
   /**
    * Checks if an article can still be marked as read
-   * (articles can be read on any day)
+   * 
+   * Current behavior: Articles can be read on any day (no time restrictions).
+   * This allows users to catch up on backlog articles at any time.
+   * 
+   * @param routineDay - The routine day of the article (currently unused)
+   * @returns Always returns true
+   * @deprecated This function always returns true. Consider removing it and 
+   *             updating callers to not check readability restrictions.
    */
-  isArticleReadable(routineDay: string): boolean {
+  isArticleReadable(_routineDay: string): boolean {
+    // Articles can be read on any day - no date restrictions
     return true;
   }
 
@@ -863,6 +871,30 @@ class StorageService {
       await AsyncStorage.removeItem(STORAGE_KEYS.DEV_DAY_OFFSET);
     } catch (error) {
       console.error('Error clearing dev day offset:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Generic get method for any key
+   */
+  async get(key: string): Promise<string | null> {
+    try {
+      return await AsyncStorage.getItem(key);
+    } catch (error) {
+      console.error(`Error getting key ${key}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Generic set method for any key
+   */
+  async set(key: string, value: string): Promise<void> {
+    try {
+      await AsyncStorage.setItem(key, value);
+    } catch (error) {
+      console.error(`Error setting key ${key}:`, error);
       throw error;
     }
   }

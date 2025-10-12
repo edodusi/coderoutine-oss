@@ -9,9 +9,11 @@ export { useArticles, useHomeArticles } from './useArticles';
 export { useTaggedArticles } from './useTaggedArticles';
 export { useFavoritesFilter } from './useFavoritesFilter';
 export { usePremiumAccess } from './usePremiumAccess';
+export { useAppUpdates } from './useAppUpdates';
 
 // Type exports
 export type { UseSubscriptionReturn } from './useSubscription';
 export type { UseArticlesResult } from './useArticles';
 export type { UseTaggedArticlesResult } from './useTaggedArticles';
 export type { UseFavoritesFilterResult } from './useFavoritesFilter';
+export type { UpdateInfo } from './useAppUpdates';
