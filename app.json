@@ -2,11 +2,11 @@
   "expo": {
     "name": "CodeRoutine",
     "slug": "coderoutine",
-    "version": "1.0.0",
+    "version": "1.2.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
@@ -17,7 +17,10 @@
       "bundleIdentifier": "com.yourcompany.coderoutine",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
-      }
+      },
+      "backgroundModes": [
+        "audio"
+      ]
     },
     "android": {
       "adaptiveIcon": {
@@ -56,8 +59,7 @@
           "color": "#C29AE3",
           "defaultChannel": "daily-articles"
         }
-      ],
-      "expo-audio"
+      ]
     ],
     "extra": {
       "apiBaseUrl": "https://your-api-url.com",

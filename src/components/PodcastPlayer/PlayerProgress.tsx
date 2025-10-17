@@ -1,9 +1,10 @@
-import React, { useState, useCallback } from 'react';
+import React, { useCallback, useState, useRef } from 'react';
 import {
   View,
-  TouchableOpacity,
   StyleSheet,
+  LayoutChangeEvent,
 } from 'react-native';
+import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 import { usePodcast } from '../../context/PodcastContext';
 import { useTheme } from '../../context/ThemeContext';
 
@@ -27,6 +28,12 @@ const PlayerProgress: React.FC = () => {
   const { state, seekTo, getPlaybackProgress } = usePodcast();
 
   const progress = getPlaybackProgress();
+  const [containerWidth, setContainerWidth] = useState<number>(0);
+  const isDraggingRef = useRef<boolean>(false);
+  const [dragProgress, setDragProgress] = useState<number | null>(null);
+  
+  // Use drag progress while dragging, otherwise use actual progress
+  const displayProgress = dragProgress !== null ? dragProgress : progress;
 
   const styles = StyleSheet.create({
     container: {
@@ -70,27 +77,64 @@ const PlayerProgress: React.FC = () => {
     },
   });
 
-  // Simple tap-to-seek implementation
-  const handleProgressTap = useCallback((event: any) => {
-    if (!state.duration) return;
+  // Handle layout to get actual container width
+  const handleLayout = useCallback((event: LayoutChangeEvent) => {
+    const { width } = event.nativeEvent.layout;
+    setContainerWidth(width);
+  }, []);
 
-    const { nativeEvent } = event;
-    const { locationX, target } = nativeEvent;
-    
-    // Get the width of the progress container (simplified approach)
-    const progressWidth = 250; // This should be calculated from actual component width
-    const newProgress = Math.max(0, Math.min(1, locationX / progressWidth));
-    const newPosition = newProgress * state.duration;
-    
-    seekTo(newPosition);
-  }, [state.duration, seekTo]);
+  // Gesture handler for dragging and tapping
+  const panGesture = Gesture.Pan()
+    .onStart((event) => {
+      if (!state.duration || !containerWidth) return;
+      isDraggingRef.current = true;
+      
+      // Calculate progress based on touch position
+      const newProgress = Math.max(0, Math.min(100, (event.x / containerWidth) * 100));
+      setDragProgress(newProgress);
+    })
+    .onUpdate((event) => {
+      if (!state.duration || !containerWidth) return;
+      
+      // Update progress while dragging
+      const newProgress = Math.max(0, Math.min(100, (event.x / containerWidth) * 100));
+      setDragProgress(newProgress);
+    })
+    .onEnd(() => {
+      if (!state.duration || !containerWidth || dragProgress === null) return;
+      
+      // Seek to the new position
+      const newPosition = (dragProgress / 100) * state.duration;
+      seekTo(newPosition);
+      
+      // Reset drag state
+      isDraggingRef.current = false;
+      setDragProgress(null);
+    })
+    .onFinalize(() => {
+      // Cleanup if gesture is cancelled
+      isDraggingRef.current = false;
+      setDragProgress(null);
+    });
+
+  const tapGesture = Gesture.Tap()
+    .onEnd((event) => {
+      if (!state.duration || !containerWidth) return;
+      
+      // Calculate progress based on tap position
+      const newProgress = Math.max(0, Math.min(100, (event.x / containerWidth) * 100));
+      const newPosition = (newProgress / 100) * state.duration;
+      seekTo(newPosition);
+    });
+
+  const composed = Gesture.Race(panGesture, tapGesture);
 
   return (
-    <TouchableOpacity
-      style={styles.container}
-      onPress={handleProgressTap}
-      activeOpacity={0.8}
-    >
+    <GestureDetector gesture={composed}>
+      <View 
+        style={styles.container}
+        onLayout={handleLayout}
+      >
       {/* Progress Background */}
       <View style={styles.progressBackground}>
         {/* Progress Fill */}
@@ -98,26 +142,27 @@ const PlayerProgress: React.FC = () => {
           style={[
             styles.progressFill,
             {
-              width: `${progress}%`,
+              width: `${displayProgress}%`,
             },
           ]}
         />
       </View>
 
       {/* Thumb */}
-      {progress > 0 && (
+      {displayProgress > 0 && (
         <View
           style={[
             styles.thumbContainer,
             {
-              left: `${Math.max(0, Math.min(100, progress))}%`,
+              left: `${Math.max(0, Math.min(100, displayProgress))}%`,
             },
           ]}
         >
           <View style={styles.thumb} />
         </View>
       )}
-    </TouchableOpacity>
+      </View>
+    </GestureDetector>
   );
 };
 

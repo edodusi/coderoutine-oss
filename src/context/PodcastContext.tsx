@@ -1,8 +1,19 @@
-import React, { createContext, useContext, useReducer, useCallback, ReactNode, useRef } from 'react';
-import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
+// Updated to use react-native-track-player
+import React, { createContext, useContext, useReducer, useCallback, ReactNode, useRef, useEffect, useMemo } from 'react';
+import TrackPlayer, { 
+  Event, 
+  State, 
+  usePlaybackState, 
+  useProgress, 
+  useTrackPlayerEvents,
+  Track,
+  Capability,
+  AppKilledPlaybackBehavior,
+  IOSCategory,
+  IOSCategoryMode,
+} from 'react-native-track-player';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Notifications from 'expo-notifications';
-import { Platform } from 'react-native';
+import { Platform, AppState, AppStateStatus } from 'react-native';
 import { useApp } from '../context/AppContext';
 
 export interface PodcastState {
@@ -145,203 +156,161 @@ export const PodcastProvider: React.FC<PodcastProviderProps> = ({ children }) =>
   const currentArticle = app.state.currentArticle;
   const autoPlayTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const autoPlayCancelRef = useRef<boolean>(false);
-  const notificationUpdateRef = useRef<((isPlaying: boolean, title: string, position?: number, duration?: number) => Promise<void>) | null>(null);
+  const isSetupRef = useRef<boolean>(false);
+  const progressSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const appStateRef = useRef<AppStateStatus>(AppState.currentState);
 
-  // Create audio player with dynamic source
-  const audioSource = state.currentPodcastUrl ? { uri: state.currentPodcastUrl } : null;
-  const player = useAudioPlayer(audioSource, {
-    updateInterval: 1000,
-  });
+  // TrackPlayer hooks
+  const playbackState = usePlaybackState();
+  const progress = useProgress(1000); // Update every 1 second
 
-  // Get player status
-  const playerStatus = useAudioPlayerStatus(player);
-
-  // Initialize audio mode and notifications
-  React.useEffect(() => {
-    const initAudioAndNotifications = async () => {
+  // Initialize TrackPlayer and notifications
+  useEffect(() => {
+    const initializePlayer = async () => {
       try {
-        // Set up audio mode for podcast playback
-        await setAudioModeAsync({
-          playsInSilentMode: true,
-          shouldPlayInBackground: true,
-        });
+        // Setup TrackPlayer only once
+        if (!isSetupRef.current) {
+          await TrackPlayer.setupPlayer({
+            autoHandleInterruptions: true,
+          });
+          isSetupRef.current = true;
 
-        // Configure notifications for media controls
-        if (Platform.OS === 'android') {
-          // Delete old 'podcast' channel if it exists (cleanup from previous version)
-          try {
-            await Notifications.deleteNotificationChannelAsync('podcast');
-          } catch (_error) {
-            // Channel might not exist, ignore error
-          }
+          // Configure player options with iOS-specific settings
+          await TrackPlayer.updateOptions({
+            // Media controls capabilities
+            capabilities: [
+              Capability.Play,
+              Capability.Pause,
+              Capability.Stop,
+              Capability.SeekTo,
+            ],
 
-          // Delete and recreate the podcast-player channel to update importance
-          // (Android doesn't allow changing importance after channel is created)
-          try {
-            await Notifications.deleteNotificationChannelAsync('podcast-player');
-          } catch (_error) {
-            // Channel might not exist, ignore error
-          }
+            // Compact view capabilities (shows in notification)
+            compactCapabilities: [
+              Capability.Play,
+              Capability.Pause,
+              Capability.Stop,
+            ],
 
-          await Notifications.setNotificationChannelAsync('podcast-player', {
-            name: 'Podcast Media Player',
-            importance: Notifications.AndroidImportance.HIGH,
-            sound: null,
-            vibrationPattern: [],
-            enableLights: false,
-            enableVibrate: false,
-            showBadge: false,
-            lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+            // Android specific options
+            android: {
+              appKilledPlaybackBehavior: AppKilledPlaybackBehavior.ContinuePlayback,
+              alwaysPauseOnInterruption: true,
+            },
+            
+            // Notification color (Android)
+            color: 0xC29AE3, // Purple color from app theme
+
+            // iOS specific options for background playback
+            ...(Platform.OS === 'ios' && {
+              ios: {
+                category: IOSCategory.Playback,
+                mode: IOSCategoryMode.SpokenAudio,
+              },
+            }),
           });
         }
 
-        // Set notification handler to show notifications even when app is open
-        Notifications.setNotificationHandler({
-          handleNotification: async (notification) => {
-            // Always show media control notifications
-            if (notification.request.content.data?.type === 'media_control') {
-              return {
-                shouldPlaySound: false,
-                shouldSetBadge: false,
-                shouldShowBanner: true,
-                shouldShowList: true,
-              };
-            }
-            return {
-              shouldPlaySound: false,
-              shouldSetBadge: false,
-              shouldShowBanner: false,
-              shouldShowList: false,
-            };
-          },
-        });
-
-        // Notification response handler will be set up separately after functions are defined
+        // TrackPlayer handles notifications natively, no need for expo-notifications setup
 
       } catch (error) {
-        console.error('Error initializing audio and notifications:', error);
+        console.error('Error initializing TrackPlayer and notifications:', error);
+        dispatch({
+          type: 'SET_ERROR',
+          payload: error instanceof Error ? error.message : 'Failed to initialize player'
+        });
       }
     };
 
-    initAudioAndNotifications();
+    initializePlayer();
+
+    // Cleanup on unmount
+    return () => {
+      TrackPlayer.reset().catch(err => console.error('Error resetting TrackPlayer on unmount:', err));
+    };
   }, []);
 
-  // Update state based on player status
-  React.useEffect(() => {
-    if (playerStatus && state.currentPodcastUrl) {
-      const isLoaded = playerStatus.isLoaded && playerStatus.duration > 0;
+  // Update state based on TrackPlayer status
+  useEffect(() => {
+    if (playbackState.state !== undefined) {
+      const isLoaded = playbackState.state !== State.None && playbackState.state !== State.Error;
+      const isPlaying = playbackState.state === State.Playing;
+      const isBuffering = playbackState.state === State.Buffering || playbackState.state === State.Loading;
+      
       const wasLoaded = state.isLoaded;
-      const wasPlaying = state.isPlaying;
-      const isNowPlaying = playerStatus.playing;
 
       dispatch({ type: 'SET_LOADED', payload: isLoaded });
-      dispatch({ type: 'SET_PLAYING', payload: playerStatus.playing });
-      dispatch({ type: 'SET_BUFFERING', payload: playerStatus.isBuffering });
-      dispatch({ type: 'SET_DURATION', payload: playerStatus.duration ? playerStatus.duration * 1000 : null });
-      dispatch({ type: 'SET_POSITION', payload: playerStatus.currentTime * 1000 });
+      dispatch({ type: 'SET_PLAYING', payload: isPlaying });
+      dispatch({ type: 'SET_BUFFERING', payload: isBuffering });
 
-      // Update notification only when playback state changes (not continuously)
-      // Don't update if player is being released (user pressed stop)
-      if (isLoaded && wasPlaying !== isNowPlaying && !state.isPlayerReleased) {
-        // Call notification update via ref to avoid circular dependency
-        if (notificationUpdateRef.current) {
-          notificationUpdateRef.current(
-            isNowPlaying,
-            state.currentArticleTitle || 'Podcast'
-          );
-        }
-      }
-
-      // Auto-play when audio becomes loaded for the first time (only if user-initiated)
-      if (isLoaded && !wasLoaded && !playerStatus.playing && state.isUserInitiated) {
-
-
-        // Clear any existing timeout and reset cancellation flag
-        if (autoPlayTimeoutRef.current) {
-          clearTimeout(autoPlayTimeoutRef.current);
-        }
-        autoPlayCancelRef.current = false;
-
-        autoPlayTimeoutRef.current = setTimeout(() => {
-          try {
-            // Check cancellation flag first
-            if (autoPlayCancelRef.current) {
-              return;
-            }
-
-            // Check if player is still valid and state allows playback
-            if (player && state.currentPodcastUrl && state.isPlayerVisible && !state.isPlayerReleased) {
-              player.play();
-            }
-          } catch (error) {
-            console.error("Auto-play failed:", error);
-          } finally {
-            autoPlayTimeoutRef.current = null;
-          }
-        }, 100);
-      }
-
-      // Check if podcast finished
-      if (playerStatus.didJustFinish) {
-        // Mark the article as read when podcast finishes
-        if (state.currentArticleId && state.currentArticleId === currentArticle?.id) {
-          markArticleAsRead(state.currentArticleId, currentArticle.tags);
-        }
-
-        // Auto-hide player on finish
-        hidePlayer();
-      }
+      // Auto-play logic is now handled directly in loadPodcast
+      // This section is kept for compatibility with restored state
     }
-  }, [playerStatus, state.currentArticleId, state.currentPodcastUrl, currentArticle, markArticleAsRead, state.isLoaded, player, state.currentArticleTitle]);
+  }, [playbackState.state, state.isLoaded, state.isUserInitiated, state.currentPodcastUrl, state.isPlayerVisible, state.isPlayerReleased]);
 
-  // Cleanup auto-play timeout on unmount
-  React.useEffect(() => {
-    return () => {
-      if (autoPlayTimeoutRef.current) {
-        clearTimeout(autoPlayTimeoutRef.current);
-        autoPlayTimeoutRef.current = null;
-        autoPlayCancelRef.current = true;
+  // Update progress from TrackPlayer (debounced for performance)
+  useEffect(() => {
+    if (progress.duration > 0) {
+      dispatch({ type: 'SET_DURATION', payload: progress.duration * 1000 }); // Convert to milliseconds
+      dispatch({ type: 'SET_POSITION', payload: progress.position * 1000 }); // Convert to milliseconds
+    }
+  }, [progress.duration, progress.position]);
+
+  // Handle app state changes for proper background behavior
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      appStateRef.current = nextAppState;
+      
+      if (nextAppState === 'active') {
+        // App came to foreground - sync state
+        TrackPlayer.getPlaybackState().then(playbackState => {
+          if (playbackState.state === State.Playing) {
+            dispatch({ type: 'SET_PLAYING', payload: true });
+          }
+        }).catch(err => console.error('Error syncing playback state:', err));
       }
+    });
+
+    return () => {
+      subscription.remove();
     };
   }, []);
 
-  // Effect to handle URL changes and replace audio source
-  React.useEffect(() => {
-    if (state.currentPodcastUrl && player) {
+  // Auto-save state to AsyncStorage (debounced to avoid excessive writes)
+  useEffect(() => {
+    if (state.currentPodcastUrl) {
+      // Clear previous timeout
+      if (progressSaveTimeoutRef.current) {
+        clearTimeout(progressSaveTimeoutRef.current);
+      }
 
-
-      // Replace audio source
-      player.replace({ uri: state.currentPodcastUrl });
-
-      // Enable pitch correction for speed changes
-      player.shouldCorrectPitch = true;
+      // Debounce save by 2 seconds
+      progressSaveTimeoutRef.current = setTimeout(async () => {
+        try {
+          const stateToSave = {
+            currentPodcastUrl: state.currentPodcastUrl,
+            currentArticleId: state.currentArticleId,
+            currentArticleTitle: state.currentArticleTitle,
+            position: state.position,
+            playbackRate: state.playbackRate,
+            isPlayerVisible: state.isPlayerVisible,
+          };
+          await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
+        } catch (error) {
+          console.error('Error saving podcast state:', error);
+        }
+      }, 2000);
     }
-  }, [state.currentPodcastUrl, player]);
 
-  // Auto-save state to AsyncStorage
-  React.useEffect(() => {
-    const saveState = async () => {
-      try {
-        const stateToSave = {
-          currentPodcastUrl: state.currentPodcastUrl,
-          currentArticleId: state.currentArticleId,
-          currentArticleTitle: state.currentArticleTitle,
-          position: state.position,
-          isPlayerVisible: state.isPlayerVisible,
-        };
-        await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
-      } catch (error) {
-        console.error('Error saving podcast state:', error);
+    return () => {
+      if (progressSaveTimeoutRef.current) {
+        clearTimeout(progressSaveTimeoutRef.current);
       }
     };
-
-    if (state.currentPodcastUrl) {
-      saveState();
-    }
-  }, [state.currentPodcastUrl, state.currentArticleId, state.position, state.isPlayerVisible]);
+  }, [state.currentPodcastUrl, state.currentArticleId, state.position, state.playbackRate, state.isPlayerVisible]);
 
   // Load saved state on mount
-  React.useEffect(() => {
+  useEffect(() => {
     const loadSavedState = async () => {
       try {
         const savedState = await AsyncStorage.getItem(STORAGE_KEY);
@@ -357,6 +326,10 @@ export const PodcastProvider: React.FC<PodcastProviderProps> = ({ children }) =>
                 isUserInitiated: false, // This is a restored state, not user-initiated
               },
             });
+            // Restore playback rate if saved
+            if (parsed.playbackRate) {
+              dispatch({ type: 'SET_PLAYBACK_RATE', payload: parsed.playbackRate });
+            }
             // Always start with player hidden, regardless of saved state
             dispatch({ type: 'SET_PLAYER_VISIBLE', payload: false });
           }
@@ -369,20 +342,24 @@ export const PodcastProvider: React.FC<PodcastProviderProps> = ({ children }) =>
     loadSavedState();
   }, []);
 
+  // Cleanup auto-play timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (autoPlayTimeoutRef.current) {
+        clearTimeout(autoPlayTimeoutRef.current);
+        autoPlayTimeoutRef.current = null;
+        autoPlayCancelRef.current = true;
+      }
+    };
+  }, []);
+
   const loadPodcast = useCallback(async (url: string, articleId: string, title: string) => {
     try {
-      // Request notification permissions when user starts a podcast
-      const { status: existingStatus } = await Notifications.getPermissionsAsync();
-
-      if (existingStatus !== 'granted') {
-        await Notifications.requestPermissionsAsync();
-      }
-
       dispatch({ type: 'SET_ERROR', payload: null });
       dispatch({ type: 'SET_LOADING', payload: true });
       dispatch({ type: 'SET_LOADED', payload: false });
 
-      // Set the current podcast (this will trigger audio source update)
+      // Set the current podcast
       dispatch({
         type: 'SET_CURRENT_PODCAST',
         payload: { url, articleId, title, isUserInitiated: true },
@@ -391,6 +368,37 @@ export const PodcastProvider: React.FC<PodcastProviderProps> = ({ children }) =>
       // Show player (will auto-play when loaded)
       dispatch({ type: 'SET_PLAYER_VISIBLE', payload: true });
 
+      // Clear the queue and add the new track
+      await TrackPlayer.reset();
+      
+      const track: Track = {
+        id: articleId,
+        url: url,
+        title: title,
+        artist: 'CodeRoutine',
+        album: 'CodeRoutine Podcast',
+        genre: 'Technology',
+        duration: 0, // Will be updated when loaded
+        artwork: require('../../assets/icon.png'), // App icon for notification background
+      };
+
+      await TrackPlayer.add(track);
+      
+      // Restore playback rate if it was set
+      if (state.playbackRate !== 1.0) {
+        await TrackPlayer.setRate(state.playbackRate);
+      }
+
+      // Explicitly update now playing metadata to ensure notification appears
+      await TrackPlayer.updateNowPlayingMetadata({
+        title: title,
+        artist: 'CodeRoutine',
+        album: 'CodeRoutine Podcast',
+        artwork: require('../../assets/icon.png'),
+      });
+
+      // Start playing immediately
+      await TrackPlayer.play();
 
     } catch (error) {
       console.error('Error loading podcast:', error);
@@ -400,127 +408,11 @@ export const PodcastProvider: React.FC<PodcastProviderProps> = ({ children }) =>
       });
       dispatch({ type: 'SET_LOADING', payload: false });
     }
-  }, []);
-
-  // Define notification update function
-  const showMediaNotification = useCallback(async (isPlaying: boolean, title: string) => {
-    try {
-      if (Platform.OS !== 'android') {
-        return;
-      }
-
-      // Static subtitle
-      const subtitle = 'Now playing on CodeRoutine';
-
-      // Action buttons with minimal icons
-      const playPauseButton = {
-        identifier: 'play-pause',
-        buttonTitle: isPlaying ? '⏸️ Pause' : '▶️ Play',
-        options: {
-          opensAppToForeground: false,
-        },
-      };
-
-      const closeButton = {
-        identifier: 'close',
-        buttonTitle: '⏹️ Stop',
-        options: {
-          opensAppToForeground: false,
-        },
-      };
-
-      // Schedule notification (Android will update existing one with same identifier)
-      await Notifications.scheduleNotificationAsync({
-        content: {
-          title: title || 'CodeRoutine Podcast',
-          body: subtitle,
-          sound: false,
-          priority: Notifications.AndroidNotificationPriority.DEFAULT,
-          sticky: false, // Allow user to dismiss
-          autoDismiss: !isPlaying, // Auto-dismiss when paused
-          data: {
-            type: 'media_control',
-            isPlaying,
-          },
-          categoryIdentifier: 'podcast-player',
-          ...(Platform.OS === 'android' && {
-            android: {
-              channelId: 'podcast-player',
-              ongoing: true,
-              autoCancel: !isPlaying, // Auto-cancel when paused
-              color: '#007AFF',
-              smallIcon: 'ic_launcher',
-            },
-          }),
-        },
-        trigger: null,
-        identifier: 'podcast-notification',
-      });
-
-      // Set notification category with actions
-      await Notifications.setNotificationCategoryAsync('podcast-player', [
-        playPauseButton,
-        closeButton,
-      ]);
-
-    } catch (error) {
-      console.error('Error showing media notification:', error);
-    }
-  }, []);
-
-  // Store notification function in ref for use in effects
-  React.useEffect(() => {
-    notificationUpdateRef.current = showMediaNotification;
-  }, [showMediaNotification]);
-
-  // Set up notification response listener after functions are defined
-  const pauseRef = useRef<(() => Promise<void>) | null>(null);
-  const playRef = useRef<(() => Promise<void>) | null>(null);
-  const hidePlayerRef = useRef<(() => Promise<void>) | null>(null);
-
-  React.useEffect(() => {
-    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
-      const action = response.actionIdentifier;
-
-      if (action === 'play-pause') {
-        if (state.isPlaying) {
-          pauseRef.current?.();
-        } else {
-          playRef.current?.();
-        }
-      } else if (action === 'close') {
-        hidePlayerRef.current?.();
-      }
-    });
-
-    return () => {
-      subscription.remove();
-    };
-  }, [state.isPlaying]);
-
-  const dismissMediaNotification = useCallback(async () => {
-    try {
-      if (Platform.OS === 'android') {
-        await Notifications.dismissNotificationAsync('podcast-notification');
-      }
-    } catch (error) {
-      console.error('Error dismissing media notification:', error);
-    }
-  }, []);
+  }, [state.playbackRate]);
 
   const play = useCallback(async () => {
-    if (!player) {
-      return;
-    }
-
     try {
-      player.play();
-
-      // Show notification immediately when play is called
-      await showMediaNotification(
-        true,
-        state.currentArticleTitle || 'Podcast'
-      );
+      await TrackPlayer.play();
     } catch (error) {
       console.error('Error playing podcast:', error);
       dispatch({
@@ -528,24 +420,11 @@ export const PodcastProvider: React.FC<PodcastProviderProps> = ({ children }) =>
         payload: error instanceof Error ? error.message : 'Failed to play podcast'
       });
     }
-  }, [player, state.currentArticleTitle, showMediaNotification]);
-
-  // Store play function in ref for notification listener
-  React.useEffect(() => {
-    playRef.current = play;
-  }, [play]);
+  }, []);
 
   const pause = useCallback(async () => {
-    if (!player) return;
-
     try {
-      player.pause();
-
-      // Update notification when paused
-      await showMediaNotification(
-        false,
-        state.currentArticleTitle || 'Podcast'
-      );
+      await TrackPlayer.pause();
     } catch (error) {
       console.error('Error pausing podcast:', error);
       dispatch({
@@ -553,19 +432,14 @@ export const PodcastProvider: React.FC<PodcastProviderProps> = ({ children }) =>
         payload: error instanceof Error ? error.message : 'Failed to pause podcast'
       });
     }
-  }, [player, state.currentArticleTitle, showMediaNotification]);
-
-  // Store pause function in ref for notification listener
-  React.useEffect(() => {
-    pauseRef.current = pause;
-  }, [pause]);
+  }, []);
 
   const seekTo = useCallback(async (positionMs: number) => {
-    if (!player || !state.duration) return;
+    if (!state.duration) return;
 
     try {
       const clampedPosition = Math.max(0, Math.min(positionMs, state.duration));
-      player.seekTo(clampedPosition / 1000); // Convert to seconds for expo-audio
+      await TrackPlayer.seekTo(clampedPosition / 1000); // Convert to seconds for TrackPlayer
     } catch (error) {
       console.error('Error seeking podcast:', error);
       dispatch({
@@ -573,27 +447,20 @@ export const PodcastProvider: React.FC<PodcastProviderProps> = ({ children }) =>
         payload: error instanceof Error ? error.message : 'Failed to seek'
       });
     }
-  }, [player, state.duration]);
+  }, [state.duration]);
 
   const stop = useCallback(async () => {
-    if (!player) return;
-
     try {
-      player.pause();
-      player.seekTo(0);
-
+      await TrackPlayer.pause();
+      await TrackPlayer.seekTo(0);
     } catch (error) {
       console.error('Error stopping podcast:', error);
     }
-  }, [player]);
+  }, []);
 
   const setPlaybackRate = useCallback(async (rate: number) => {
-    if (!player) return;
-
     try {
-      // Enable pitch correction to maintain original pitch at different speeds
-      player.shouldCorrectPitch = true;
-      player.setPlaybackRate(rate, 'high');
+      await TrackPlayer.setRate(rate);
       dispatch({ type: 'SET_PLAYBACK_RATE', payload: rate });
     } catch (error) {
       console.error('Error setting playback rate:', error);
@@ -602,7 +469,7 @@ export const PodcastProvider: React.FC<PodcastProviderProps> = ({ children }) =>
         payload: error instanceof Error ? error.message : 'Failed to set playback rate'
       });
     }
-  }, [player]);
+  }, []);
 
   const showPlayer = useCallback(() => {
     dispatch({ type: 'SET_PLAYER_VISIBLE', payload: true });
@@ -616,18 +483,23 @@ export const PodcastProvider: React.FC<PodcastProviderProps> = ({ children }) =>
       autoPlayCancelRef.current = true;
     }
 
+    // Clear any pending progress save timeout
+    if (progressSaveTimeoutRef.current) {
+      clearTimeout(progressSaveTimeoutRef.current);
+      progressSaveTimeoutRef.current = null;
+    }
+
     // Mark player as released before cleanup
     dispatch({ type: 'SET_PLAYER_RELEASED', payload: true });
 
     // Always stop playback completely and cleanup
-    if (player) {
-      player.pause();
-      player.seekTo(0); // Reset to beginning
-
+    try {
+      await TrackPlayer.stop();
+      await TrackPlayer.reset(); // Clear the queue (also dismisses notification)
+    } catch (error) {
+      // Ignore errors if player is already stopped/reset
+      console.log('Player already stopped or reset');
     }
-
-    // Dismiss media notification
-    await dismissMediaNotification();
 
     // Clear saved state
     try {
@@ -636,21 +508,33 @@ export const PodcastProvider: React.FC<PodcastProviderProps> = ({ children }) =>
       console.error('Error clearing saved state:', error);
     }
 
-    // Audio source will be reset when currentPodcastUrl is cleared
-
     dispatch({ type: 'RESET_PLAYER' });
     dispatch({ type: 'SET_PLAYER_VISIBLE', payload: false });
     dispatch({ type: 'SET_PLAYER_RELEASED', payload: false });
-  }, [player, dismissMediaNotification]);
-
-  // Store hidePlayer function in ref for notification listener
-  React.useEffect(() => {
-    hidePlayerRef.current = hidePlayer;
-  }, [hidePlayer]);
+  }, []);
 
   const togglePlayerExpansion = useCallback(() => {
     dispatch({ type: 'SET_PLAYER_EXPANDED', payload: !state.isPlayerExpanded });
   }, [state.isPlayerExpanded]);
+
+  // Handle TrackPlayer events
+  useTrackPlayerEvents([Event.PlaybackQueueEnded, Event.PlaybackError], async (event) => {
+    if (event.type === Event.PlaybackQueueEnded) {
+      // Mark the article as read when podcast finishes
+      if (state.currentArticleId && state.currentArticleId === currentArticle?.id) {
+        markArticleAsRead(state.currentArticleId, currentArticle.tags);
+      }
+
+      // Auto-hide player on finish
+      hidePlayer();
+    } else if (event.type === Event.PlaybackError) {
+      console.error('TrackPlayer playback error:', event);
+      dispatch({
+        type: 'SET_ERROR',
+        payload: 'Playback error occurred'
+      });
+    }
+  });
 
   const formatTime = useCallback((milliseconds: number): string => {
     const totalSeconds = Math.floor(milliseconds / 1000);
@@ -673,7 +557,8 @@ export const PodcastProvider: React.FC<PodcastProviderProps> = ({ children }) =>
     return [0.8, 1.0, 1.2];
   }, []);
 
-  const contextValue: PodcastContextType = {
+  // Memoize context value to prevent unnecessary re-renders
+  const contextValue: PodcastContextType = useMemo(() => ({
     state,
     loadPodcast,
     play,
@@ -688,15 +573,22 @@ export const PodcastProvider: React.FC<PodcastProviderProps> = ({ children }) =>
     getRemainingTime,
     getPlaybackProgress,
     getAvailablePlaybackRates,
-  };
-
-  // Cleanup notification on unmount
-  React.useEffect(() => {
-    return () => {
-      // Dismiss notification when component unmounts (app closes)
-      dismissMediaNotification();
-    };
-  }, [dismissMediaNotification]);
+  }), [
+    state,
+    loadPodcast,
+    play,
+    pause,
+    seekTo,
+    stop,
+    setPlaybackRate,
+    showPlayer,
+    hidePlayer,
+    togglePlayerExpansion,
+    formatTime,
+    getRemainingTime,
+    getPlaybackProgress,
+    getAvailablePlaybackRates,
+  ]);
 
   return (
     <PodcastContext.Provider value={contextValue}>
@@ -712,3 +604,6 @@ export const usePodcast = (): PodcastContextType => {
   }
   return context;
 };
+
+// Export for TypeScript module resolution
+export default PodcastProvider;
