@@ -4,6 +4,7 @@
   "main": "index.ts",
   "type": "module",
   "author": "Edoardo Dusi",
+  "license": "MIT",
   "scripts": {
     "start": "expo start",
     "android": "expo run:android",
@@ -68,6 +69,5 @@
     "readline-sync": "^1.4.10",
     "typescript": "~5.9.3",
     "vitest": "^3.2.4"
-  },
-  "private": true
+  }
 }
